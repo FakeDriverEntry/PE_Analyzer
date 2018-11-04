@@ -534,6 +534,12 @@ void	ListImportFunctions(WCHAR *pwszPeFilePath)
 
 	bRet = ReadFile(hPeFile, &DataDirectoryEntry, sizeof(IMAGE_DATA_DIRECTORY), &dwBytesRead, NULL);
 
+	if (DataDirectoryEntry.VirtualAddress == 0)
+	{
+		printf("pe file %s's import descriptor is empty ...\n", pwszPeFilePath);
+		return;
+	}
+
 	// 获得IMAGE_IMPORT_DESCRIPTOR在磁盘文件中的偏移以及所在节的RVA和磁盘文件起始地址
 	dwImportDescOffset = GetImageImportDescriptorOffset(pwszPeFilePath, DataDirectoryEntry.VirtualAddress, &dwIdataRva, &dwIdataOffset);
 
