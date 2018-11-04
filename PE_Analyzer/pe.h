@@ -17,8 +17,6 @@ void		ParseSectionTable(WCHAR *pwszPeFilePath);
 
 void		ParseDataDirectory(WCHAR *pwszPeFilePath);
 
-DWORD		GetImageImportDescriptorOffset(WCHAR *pwszPeFilePath, DWORD dwImportDescRva);
-
 void		ListImportFunctions(WCHAR *pwszPeFilePath);
 
 

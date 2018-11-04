@@ -412,7 +412,7 @@ void	ParseDataDirectory(WCHAR *pwszPeFilePath)
 	}
 }
 
-DWORD	GetImageImportDescriptorOffset(WCHAR *pwszPeFilePath, DWORD dwImportDescRva, DWORD *pdwIdataRva)
+DWORD	GetImageImportDescriptorOffset(WCHAR *pwszPeFilePath, DWORD dwImportDescRva, DWORD *pdwIdataRva, DWORD *pdwIdataOffset)
 {
 	HANDLE					hPeFile = INVALID_HANDLE_VALUE;
 	DWORD					dwBytesRead;
@@ -421,6 +421,7 @@ DWORD	GetImageImportDescriptorOffset(WCHAR *pwszPeFilePath, DWORD dwImportDescRv
 	IMAGE_FILE_HEADER		fileHeader;
 	IMAGE_SECTION_HEADER	sectionHeader;
 	ULONG					ulIndex;
+	DWORD					dwIdataOffset;
 
 	hPeFile = CreateFileW(pwszPeFilePath, 
 		GENERIC_READ,
@@ -433,7 +434,7 @@ DWORD	GetImageImportDescriptorOffset(WCHAR *pwszPeFilePath, DWORD dwImportDescRv
 	if (hPeFile == NULL)
 	{
 		_tprintf(_T("failed to CreateFileW %s : %d\n"), pwszPeFilePath, GetLastError());
-		return ;
+		return 0;
 	}
 
 	bRet = ReadFile(hPeFile, &dosHeader, sizeof(IMAGE_DOS_HEADER), &dwBytesRead, NULL);
@@ -441,7 +442,7 @@ DWORD	GetImageImportDescriptorOffset(WCHAR *pwszPeFilePath, DWORD dwImportDescRv
 	if (!bRet)
 	{
 		_tprintf(_T("failed to ReadFile IMAGE_DOS_HEADER : %d\n"), GetLastError());
-		return ;
+		return 0;
 	}
 
 	SetFilePointer(hPeFile, dosHeader.e_lfanew+sizeof(IMAGE_NT_SIGNATURE), NULL, FILE_BEGIN);
@@ -451,7 +452,7 @@ DWORD	GetImageImportDescriptorOffset(WCHAR *pwszPeFilePath, DWORD dwImportDescRv
 	if (!bRet)
 	{
 		_tprintf(_T("failed to ReadFile IMAGE_FILE_HEADER : %d\n"), GetLastError());
-		return ;
+		return 0;
 	}
 
 	SetFilePointer(hPeFile, 
@@ -463,9 +464,10 @@ DWORD	GetImageImportDescriptorOffset(WCHAR *pwszPeFilePath, DWORD dwImportDescRv
 	{
 		bRet = ReadFile(hPeFile, &sectionHeader, IMAGE_SIZEOF_SECTION_HEADER, &dwBytesRead, NULL);
 		
-		if (dwImportDescRva>=sectionHeader.VirtualAddress && dwImportDescRva<sectionHeader.VirtualAddress+sectionHeader.Misc)
+		if (dwImportDescRva>=sectionHeader.VirtualAddress && dwImportDescRva<sectionHeader.VirtualAddress+sectionHeader.Misc.VirtualSize)
 		{
 			*pdwIdataRva = sectionHeader.VirtualAddress;
+			*pdwIdataOffset = sectionHeader.PointerToRawData;
 			return dwImportDescRva-sectionHeader.VirtualAddress+sectionHeader.PointerToRawData;
 		}
 	}
@@ -484,7 +486,12 @@ void	ListImportFunctions(WCHAR *pwszPeFilePath)
 	ULONG					ulIndex;
 	DWORD					dwImportDescOffset;
 	DWORD					dwIdataRva;
+	DWORD					dwIdataOffset;
 	IMAGE_IMPORT_DESCRIPTOR	ImportDescriptor;
+	DWORD					dwDllNameOffset;
+	char					szDllName[MAX_PATH] = {0x00};
+
+	_tprintf(_T("\n******** Import Functions Name *******\n"));
 
 	hPeFile = CreateFileW(pwszPeFilePath, 
 		GENERIC_READ,
@@ -508,6 +515,7 @@ void	ListImportFunctions(WCHAR *pwszPeFilePath)
 		return ;
 	}
 
+	//	定位到IMAGE_FILE_HEADER
 	SetFilePointer(hPeFile, dosHeader.e_lfanew+sizeof(IMAGE_NT_SIGNATURE), NULL, FILE_BEGIN);
 
 	bRet = ReadFile(hPeFile, &fileHeader, sizeof(fileHeader), &dwBytesRead, NULL);
@@ -518,6 +526,7 @@ void	ListImportFunctions(WCHAR *pwszPeFilePath)
 		return ;
 	}
 
+	//	定位到数据目录表的第二个表项，此表项描述了IMAGE_IMPORT_DESCRIPTOR的RVA和大小
 	SetFilePointer(hPeFile,
 		dosHeader.e_lfanew+sizeof(IMAGE_NT_SIGNATURE)+IMAGE_SIZEOF_FILE_HEADER+fileHeader.SizeOfOptionalHeader-sizeof(IMAGE_DATA_DIRECTORY)*IMAGE_NUMBEROF_DIRECTORY_ENTRIES+sizeof(IMAGE_DATA_DIRECTORY),
 		NULL,
@@ -525,12 +534,64 @@ void	ListImportFunctions(WCHAR *pwszPeFilePath)
 
 	bRet = ReadFile(hPeFile, &DataDirectoryEntry, sizeof(IMAGE_DATA_DIRECTORY), &dwBytesRead, NULL);
 
-	dwImportDescOffset = GetImageImportDescriptorOffset(pwszPeFilePath, DataDirectoryEntry.VirtualAddress, &dwIdataRva);
+	// 获得IMAGE_IMPORT_DESCRIPTOR在磁盘文件中的偏移以及所在节的RVA和磁盘文件起始地址
+	dwImportDescOffset = GetImageImportDescriptorOffset(pwszPeFilePath, DataDirectoryEntry.VirtualAddress, &dwIdataRva, &dwIdataOffset);
 
-	SetFilePointer(hPeFile, dwImportDescOffset, NULL, FILE_BEGIN);
+	if(dwImportDescOffset == 0)
+	{
+		printf("failed to get import section's offset ...\n");
+		return;
+	}
 
 	for (ulIndex = 0; ulIndex<DataDirectoryEntry.Size/sizeof(IMAGE_IMPORT_DESCRIPTOR); ulIndex++)
 	{
+		DWORD					dwImageThunkDataOffset;
+		DWORD					dwImportByNameOffset;
+		IMAGE_IMPORT_BY_NAME	ImportByName;
+		IMAGE_THUNK_DATA32		ThunkData;
+		ULONG					i = 0;
+		char					szFuncName[40] = {0x00};
+		WORD					wHint;
+		
+		SetFilePointer(hPeFile, dwImportDescOffset+ulIndex*sizeof(IMAGE_IMPORT_DESCRIPTOR), NULL, FILE_BEGIN);
+		
 		ReadFile(hPeFile, &ImportDescriptor, sizeof(IMAGE_IMPORT_DESCRIPTOR), &dwBytesRead, NULL);
+
+		if (ImportDescriptor.Characteristics == 0)
+		{
+			break;
+		}
+
+		dwDllNameOffset = ImportDescriptor.Name-dwIdataRva+dwIdataOffset;
+
+		SetFilePointer(hPeFile, dwDllNameOffset, NULL, FILE_BEGIN);
+
+		ReadFile(hPeFile, szDllName, MAX_PATH*sizeof(char), &dwBytesRead, NULL);
+
+		printf("Import Dll Name : %s\n", szDllName);
+
+		dwImageThunkDataOffset = ImportDescriptor.OriginalFirstThunk - dwIdataRva + dwIdataOffset;
+
+		for (i = 0; ; i++)
+		{
+			SetFilePointer(hPeFile, dwImageThunkDataOffset+sizeof(IMAGE_THUNK_DATA32)*i, NULL, FILE_BEGIN);
+
+			ReadFile(hPeFile, &ThunkData, sizeof(IMAGE_THUNK_DATA32), &dwBytesRead, NULL);
+
+			if (ThunkData.u1.AddressOfData == 0)
+			{
+				break;
+			}
+
+			dwImportByNameOffset = ThunkData.u1.AddressOfData - dwIdataRva + dwIdataOffset;
+
+			SetFilePointer(hPeFile, dwImportByNameOffset, NULL, FILE_BEGIN);
+
+			ReadFile(hPeFile, szFuncName, sizeof(szFuncName), &dwBytesRead, NULL);
+
+			memcpy(&wHint, szFuncName, sizeof(WORD));
+
+			printf("hint : 0x%x , function name : %s\n", wHint, &szFuncName[2]);
+		}
 	}
 }

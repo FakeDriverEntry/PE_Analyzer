@@ -19,6 +19,8 @@ int _tmain(int argc, _TCHAR* argv[])
 		ParseSectionTable(argv[1]);
 
 		ParseDataDirectory(argv[1]);
+
+		ListImportFunctions(argv[1]);
 	}
 	else
 	{
