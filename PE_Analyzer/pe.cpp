@@ -556,7 +556,7 @@ void	ListImportFunctions(WCHAR *pwszPeFilePath)
 		IMAGE_IMPORT_BY_NAME	ImportByName;
 		IMAGE_THUNK_DATA32		ThunkData;
 		ULONG					i = 0;
-		char					szFuncName[40] = {0x00};
+		char					szFuncName[64] = {0x00};
 		WORD					wHint;
 		
 		SetFilePointer(hPeFile, dwImportDescOffset+ulIndex*sizeof(IMAGE_IMPORT_DESCRIPTOR), NULL, FILE_BEGIN);
@@ -600,4 +600,95 @@ void	ListImportFunctions(WCHAR *pwszPeFilePath)
 			printf("hint : 0x%x , function name : %s\n", wHint, &szFuncName[2]);
 		}
 	}
+
+	CloseHandle(hPeFile);
+}
+
+void	ListExportFunctions(WCHAR *pwszPeFilePath)
+{
+	HANDLE					hPeFile;
+	IMAGE_DOS_HEADER		dosHeader;
+	IMAGE_FILE_HEADER		fileHeader;
+	DWORD					dwBytesRead;
+	bool					bRet;
+	IMAGE_DATA_DIRECTORY	DataDirectory;
+	DWORD					dwExportDirOffset;
+	DWORD					dwSectionImageBase;
+	DWORD					dwSectionFileBase;
+	IMAGE_EXPORT_DIRECTORY	imageExportDir;
+	DWORD					dwAddrOfNameOffset;
+	DWORD					dwNameAddress;
+	ULONG					ulIndex = 0;
+	DWORD					dwNameAddressOffset;
+	char					szFuncName[40] = {0x00};
+	char					szModuleName[32] = {0x00};
+	DWORD					dwModuleNameOffset = 0;
+
+	hPeFile = CreateFileW(pwszPeFilePath,
+		GENERIC_READ,
+		FILE_SHARE_READ,
+		NULL,
+		OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL,
+		NULL);
+
+	if (hPeFile == INVALID_HANDLE_VALUE)
+	{
+		_tprintf(_T("CreateFile %s failed : %d\n"), pwszPeFilePath, GetLastError());
+		return;
+	}
+
+	ReadFile(hPeFile, &dosHeader, sizeof(IMAGE_DOS_HEADER), &dwBytesRead, NULL);
+
+	SetFilePointer(hPeFile, dosHeader.e_lfanew+sizeof(IMAGE_NT_SIGNATURE), NULL, FILE_BEGIN);
+
+	ReadFile(hPeFile, &fileHeader, sizeof(IMAGE_FILE_HEADER), &dwBytesRead, NULL);
+
+	//	数据目录表的第一项就是导出表结构体IMAGE_EXPORT_DIRECTORY的RVA和大小
+	SetFilePointer(hPeFile, dosHeader.e_lfanew+sizeof(IMAGE_NT_SIGNATURE)+IMAGE_SIZEOF_FILE_HEADER+fileHeader.SizeOfOptionalHeader-sizeof(IMAGE_DATA_DIRECTORY)*IMAGE_NUMBEROF_DIRECTORY_ENTRIES, NULL, FILE_BEGIN);
+
+	ReadFile(hPeFile, &DataDirectory, sizeof(IMAGE_DATA_DIRECTORY), &dwBytesRead, NULL);
+
+	dwExportDirOffset = GetImageImportDescriptorOffset(pwszPeFilePath, DataDirectory.VirtualAddress, &dwSectionImageBase, &dwSectionFileBase);
+
+	if (dwExportDirOffset == 0)
+	{
+		printf("GetImageImportDescriptorOffset failed ...\n");
+		return;
+	}
+
+	SetFilePointer(hPeFile, dwExportDirOffset, NULL, FILE_BEGIN);
+
+	ReadFile(hPeFile, &imageExportDir, sizeof(IMAGE_EXPORT_DIRECTORY), &dwBytesRead, NULL);
+
+	_tprintf(_T("\n******** Export Functions Name *******\n"));
+
+	printf("export function number : %d\n", imageExportDir.NumberOfFunctions);
+
+	dwModuleNameOffset = imageExportDir.Name - dwSectionImageBase + dwSectionFileBase;
+
+	SetFilePointer(hPeFile, dwModuleNameOffset, NULL, FILE_BEGIN);
+
+	ReadFile(hPeFile, szModuleName, sizeof(szModuleName), &dwBytesRead, NULL);
+
+	printf("module name : %s\n", szModuleName);
+
+	dwAddrOfNameOffset = imageExportDir.AddressOfNames - dwSectionImageBase + dwSectionFileBase;
+
+	for (ulIndex = 0; ulIndex<imageExportDir.NumberOfNames; ulIndex++)
+	{
+		SetFilePointer(hPeFile, dwAddrOfNameOffset+ulIndex*sizeof(DWORD), NULL, FILE_BEGIN);
+
+		ReadFile(hPeFile, &dwNameAddress, sizeof(DWORD), &dwBytesRead, NULL);
+
+		dwNameAddressOffset = dwNameAddress - dwSectionImageBase + dwSectionFileBase;		
+
+		SetFilePointer(hPeFile, dwNameAddressOffset, NULL, FILE_BEGIN);
+
+		ReadFile(hPeFile, szFuncName, sizeof(szFuncName), &dwBytesRead, NULL);
+
+		printf("export func name : %s\n", szFuncName);
+	}
+
+	CloseHandle(hPeFile);
 }

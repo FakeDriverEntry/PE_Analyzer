@@ -19,5 +19,7 @@ void		ParseDataDirectory(WCHAR *pwszPeFilePath);
 
 void		ListImportFunctions(WCHAR *pwszPeFilePath);
 
+void		ListExportFunctions(WCHAR *pwszPeFilePath);
+
 
 #endif

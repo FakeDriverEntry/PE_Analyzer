@@ -21,6 +21,8 @@ int _tmain(int argc, _TCHAR* argv[])
 		ParseDataDirectory(argv[1]);
 
 		ListImportFunctions(argv[1]);
+
+		ListExportFunctions(argv[1]);
 	}
 	else
 	{
